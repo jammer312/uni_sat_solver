@@ -60,6 +60,7 @@ pub struct State {
 }
 
 impl State {
+    #[allow(dead_code)]
     pub fn new(mut representation: vec::Vec<isize>) -> Result<State, Error> {
         representation.sort();
         representation.dedup();
@@ -175,10 +176,6 @@ impl Literal {
         }
     }
 
-    pub fn invert(&mut self) {
-        self.inverted = !self.inverted;
-    }
-
     pub fn inverted(&self) -> Self {
         return Self {
             inverted: !self.inverted,
@@ -215,6 +212,7 @@ impl Disjunct {
         }
     }
 
+    #[allow(dead_code)]
     fn compute(&self, state: &State) -> Value {
         self.literals
             .iter()
@@ -291,6 +289,7 @@ impl CNF {
         Ok(CNF { disjuncts })
     }
 
+    #[allow(dead_code)]
     fn compute(&self, state: &State) -> Value {
         self.disjuncts
             .iter()
@@ -301,10 +300,6 @@ impl CNF {
         self.disjuncts
             .iter()
             .fold(0, |acc, next| max(acc, next.width()))
-    }
-
-    pub fn extend(&mut self, state: &State) {
-        self.disjuncts.push(state.into())
     }
 }
 

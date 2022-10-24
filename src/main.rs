@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use nom::Finish;
 use solver::Solvable;
 use std::error;

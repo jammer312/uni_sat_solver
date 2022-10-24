@@ -17,8 +17,8 @@ pub enum Decision<Implication> {
 }
 
 trait Theory<Implication> {
-    fn extend(&mut self, extender: &Implication) -> Result<(), Error>;
-    fn reduce(&mut self, reducer: &Implication);
+    fn extend(&mut self, implication: &Implication) -> Result<(), Error>;
+    fn reduce(&mut self, implication: &Implication);
 }
 
 impl Theory<Literal> for State {
@@ -150,12 +150,8 @@ mod cdcl {
             let mut mut_self = (*self).clone();
             let mut decisions = Vec::<Literal>::new();
             let mut all_implications_in_order = Vec::<Vec<(Literal, Disjunct)>>::new();
-            let mut levels = HashMap::<Literal, usize>::new();
-            let mut last_learned = None;
+            let mut literal_levels = HashMap::<Literal, usize>::new();
             loop {
-                // println!("level: {}", decisions.len());
-                // println!("current CNF: {mut_self}");
-                // println!("current state: {state}");
                 let current_level = decisions.len();
                 let mut implications_in_order =
                     if all_implications_in_order.len() == current_level + 1 {
@@ -172,7 +168,7 @@ mod cdcl {
                             Decision::Implies(implication) => {
                                 exhausted = false;
                                 implications_in_order.push((implication.clone(), disjunct.clone()));
-                                levels.insert(*implication, current_level);
+                                literal_levels.insert(*implication, current_level);
                                 state.extend(implication)?;
                             }
                             Decision::Never => {
@@ -180,20 +176,15 @@ mod cdcl {
                                     return Ok(SolverVerdict::NotSatisfiable);
                                 }
                                 let mut learned = disjunct.clone();
-                                // println!("conflict: {learned}");
                                 while let Some((last_implication, disjunct)) =
                                     implications_in_order.pop()
                                 {
-                                    // print!("{last_implication} deduced from {disjunct}");
                                     state.reduce(&last_implication);
-                                    levels.remove(&last_implication);
+                                    literal_levels.remove(&last_implication);
                                     if !learned.literals.contains(&last_implication.inverted()) {
-                                        // println!(" not related");
                                         continue;
                                     }
-                                    // println!(" related");
                                     learned.resolve(&disjunct, &last_implication)?;
-                                    // println!("after resolve: {learned}");
                                     let amt = implications_in_order.iter().fold(
                                         0,
                                         |acc, (literal, _)| {
@@ -218,10 +209,8 @@ mod cdcl {
                                         amt
                                     };
                                     if amt <= 1 {
-                                        // println!("amt: {amt}, breaking prematurely");
                                         break;
                                     }
-                                    // println!("amt:  {amt}");
                                 }
                                 learned_to_add = Some(learned);
                                 break 'propagation;
@@ -231,70 +220,50 @@ mod cdcl {
                     }
                 }
                 if let Some(learned) = learned_to_add {
-                    if let Some(last_learned) = last_learned {
-                        if last_learned == learned {
-                            return Err(Error::SolverError("learned the same".to_owned()));
-                        }
-                    }
-                    last_learned = Some(learned.clone());
-                    // let mut literals: Vec<&Literal> = levels.keys().collect();
-                    // literals.sort();
-                    // literals.iter().for_each(|key| {
-                    //     println!("{key}: {}", levels.get(key).unwrap());
-                    // });
-                    // println!("------");
-                    // println!("{learned}");
                     let backtrack_level = learned
                         .literals
                         .iter()
-                        .filter_map(|from| levels.get(&from.inverted()))
-                        .fold((None, None), |acc, next| {
-                            // println!("{next}");
-                            match acc {
-                                (None, None) => return (Some(*next), None),
-                                (Some(x), None) => (Some(max(x, *next)), Some(min(x, *next))),
-                                (Some(x), Some(y)) => {
-                                    (Some(max(x, *next)), Some(max(min(x, *next), y)))
-                                }
-                                x => x,
+                        .filter_map(|from| literal_levels.get(&from.inverted()))
+                        .fold((None, None), |acc, next| match acc {
+                            (None, None) => return (Some(*next), None),
+                            (Some(x), None) => (Some(max(x, *next)), Some(min(x, *next))),
+                            (Some(x), Some(y)) => {
+                                (Some(max(x, *next)), Some(max(min(x, *next), y)))
                             }
+                            x => x,
                         })
                         .1
                         .unwrap_or(0);
                     if backtrack_level == current_level {
                         return Ok(SolverVerdict::NotSatisfiable);
                     } else {
-                        // println!("conflict, learned {learned}, rolled back to {backtrack_level}",);
                         for (implication, _) in implications_in_order {
-                            levels.remove(&implication);
+                            literal_levels.remove(&implication);
                             state.reduce(&implication);
                         }
                         while decisions.len() > backtrack_level {
                             if all_implications_in_order.len() == decisions.len() + 1 {
                                 for (implication, _) in all_implications_in_order.pop().unwrap() {
-                                    levels.remove(&implication);
+                                    literal_levels.remove(&implication);
                                     state.reduce(&implication);
                                 }
                             }
                             let decision = decisions.pop().unwrap();
-                            levels.remove(&decision);
+                            literal_levels.remove(&decision);
                             state.reduce(&decision);
                         }
                     }
                     mut_self.disjuncts.push(learned);
                 } else {
-                    // println!("resulting state: {state}");
-                    // println!("no conflict");
                     if state.is_filled() {
                         return Ok(SolverVerdict::Satisfiable(state));
                     }
                     for disjunct in &mut_self.disjuncts {
                         if let Some(hypothesis) = disjunct.hypothesize(&state) {
                             decisions.push(hypothesis);
-                            levels.insert(hypothesis, current_level + 1);
+                            literal_levels.insert(hypothesis, current_level + 1);
                             all_implications_in_order.push(implications_in_order);
                             state.extend(&hypothesis)?;
-                            // println!("hypothesis: {hypothesis}");
                             break;
                         }
                     }
