@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use nom::Finish;
+use solver::Solvable;
 use std::error;
 use std::fmt;
 use std::io;
@@ -9,13 +10,18 @@ use std::str;
 
 mod language;
 mod parser;
+mod solver;
 
 #[derive(Debug)]
 pub enum Error {
     IO(io::Error),
     UTFConversion(str::Utf8Error),
     Parse(nom::error::Error<String>),
+    ParseVerbose(String),
     Validation(String),
+    IncorrectInput(String),
+    ConflictingImplication,
+    SolverError(String),
 }
 
 impl fmt::Display for Error {
@@ -24,7 +30,11 @@ impl fmt::Display for Error {
             Error::IO(..) => write!(f, "io error"),
             Error::UTFConversion(..) => write!(f, "urf8 conversion error"),
             Error::Parse(..) => write!(f, "parse error"),
+            Error::ParseVerbose(reason) => write!(f, "parse error: {reason}"),
             Error::Validation(reason) => write!(f, "validation error: {reason}"),
+            Error::IncorrectInput(reason) => write!(f, "incorrect input: {reason}"),
+            Error::ConflictingImplication => write!(f, "tried to add conflicting implication"),
+            Error::SolverError(reason) => write!(f, "solver error: {reason}"),
         }
     }
 }
@@ -35,7 +45,11 @@ impl error::Error for Error {
             Error::IO(ref err) => Some(err),
             Error::UTFConversion(ref err) => Some(err),
             Error::Parse(ref err) => Some(err),
-            Error::Validation(ref _err) => None,
+            Error::ParseVerbose(..) => None,
+            Error::Validation(..) => None,
+            Error::IncorrectInput(..) => None,
+            Error::ConflictingImplication => None,
+            Error::SolverError(..) => None,
         }
     }
 }
@@ -62,14 +76,10 @@ fn main() -> Result<(), Error> {
     let mut buffer = Vec::new();
     io::stdin().read_to_end(&mut buffer)?;
     let data = str::from_utf8(&buffer)?;
-    let cnf = parser::cnf(data).finish();
-    match cnf {
-        Ok((_, cnf)) => println!("{:?}", cnf?),
-        Err(err) => println!("{:?}", err),
-    }
-    // let cnf = parser::cnf(str::from_utf8(&buffer)?)
-    //     .map_err(|e| e.to_owned())
-    //     .finish()
-    //     .1;
-    Ok(())
+    let cnf = parser::cnf(data)
+        .map_err(|e| e.map(|e| Error::ParseVerbose(nom::error::convert_error(data, e.into()))))
+        .finish()?
+        .1?;
+    // println!("{cnf}");
+    Ok(println!("{}", cnf.solve()?))
 }

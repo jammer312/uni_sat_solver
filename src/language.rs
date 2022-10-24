@@ -1,8 +1,12 @@
 use crate::Error;
+use core::cmp::max;
 use core::ops;
+use std::fmt;
+use std::fmt::Display;
 use std::vec;
-#[derive(Copy, Clone)]
-enum Value {
+
+#[derive(Copy, Clone, PartialEq, Debug)]
+pub enum Value {
     Some(bool),
     Any,
 }
@@ -50,41 +54,164 @@ impl From<bool> for Value {
     }
 }
 
-struct State {
-    variables: vec::Vec<Value>,
+#[derive(Clone, Debug)]
+pub struct State {
+    pub variables: vec::Vec<Value>,
 }
 
-#[derive(Debug)]
-struct Literal {
-    index: usize,
-    inverted: bool,
+impl State {
+    pub fn new(mut representation: vec::Vec<isize>) -> Result<State, Error> {
+        representation.sort();
+        representation.dedup();
+        let max_index = representation
+            .iter()
+            .fold(0, |acc, next| max(acc, next.unsigned_abs()));
+        let mut variables = vec::Vec::<Value>::with_capacity(max_index);
+        variables.resize(max_index, Value::Any);
+        representation
+            .iter()
+            .try_for_each(|v| match (v, v.signum() > 0) {
+                (0, ..) => Err(Error::IncorrectInput(
+                    "state init vec cannot contain zeros".to_owned(),
+                )),
+                (index, value) => {
+                    let index = index.unsigned_abs() - 1;
+                    match variables[index] {
+                        Value::Some(_) => Err(Error::IncorrectInput(
+                            "state init vec cannot contain conflicting values".to_owned(),
+                        )),
+                        Value::Any => Ok(variables[index] = value.into()),
+                    }
+                }
+            })?;
+        Ok(State { variables })
+    }
+
+    pub fn new_empty(size: usize) -> State {
+        State {
+            variables: vec![Value::Any; size],
+        }
+    }
+
+    pub fn add(&mut self, literal: &Literal) -> Result<(), Error> {
+        if self.variables.len() < literal.index + 1 {
+            self.variables.resize(literal.index + 1, Value::Any)
+        };
+        match self.variables[literal.index] {
+            Value::Any => Ok(self.variables[literal.index] = Value::Some(!literal.inverted)),
+            Value::Some(x) => {
+                if x == literal.inverted {
+                    Err(Error::ConflictingImplication)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
+    pub fn remove(&mut self, literal: &Literal) {
+        match self.variables.get(literal.index) {
+            None => (),
+            Some(_) => self.variables[literal.index] = Value::Any,
+        }
+    }
+
+    pub fn is_filled(&self) -> bool {
+        for variable in &self.variables {
+            match variable {
+                Value::Any => return false,
+                _ => (),
+            }
+        }
+        return true;
+    }
+
+    fn as_literals(&self) -> vec::Vec<Literal> {
+        self.variables
+            .iter()
+            .enumerate()
+            .filter_map(|pair| match pair {
+                (i, Value::Some(v)) => Some(Literal {
+                    index: i,
+                    inverted: !v,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+impl Display for State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.variables
+            .iter()
+            .enumerate()
+            .try_for_each(|pair| match pair {
+                (index, Value::Some(true)) => write!(f, "x{} ", index + 1),
+                (index, Value::Some(false)) => write!(f, "^x{} ", index + 1),
+                _ => Ok(()),
+            })
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
+pub struct Literal {
+    pub index: usize,
+    pub inverted: bool,
 }
 
 impl Literal {
-    fn new(literal: &isize) -> Literal {
+    pub fn new(literal: &isize) -> Literal {
         Literal {
-            index: literal.unsigned_abs(),
+            index: literal.unsigned_abs() - 1,
             inverted: literal.signum() < 0,
         }
     }
 
-    fn compute(&self, state: &State) -> Value {
+    pub fn compute(&self, state: &State) -> Value {
         match state.variables.get(self.index) {
             Some(&x) => x ^ self.inverted.into(),
             None => Value::Any,
         }
     }
+
+    pub fn invert(&mut self) {
+        self.inverted = !self.inverted;
+    }
+
+    pub fn inverted(&self) -> Self {
+        return Self {
+            inverted: !self.inverted,
+            ..*self
+        };
+    }
 }
 
-#[derive(Debug)]
+impl Display for Literal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let index = self.index + 1;
+        if self.inverted {
+            write!(f, "^x{index}")
+        } else {
+            write!(f, "x{index}")
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Disjunct {
-    literals: vec::Vec<Literal>,
+    pub literals: vec::Vec<Literal>,
 }
 
 impl Disjunct {
-    pub fn new(clause: vec::Vec<isize>) -> Disjunct {
+    pub fn new(mut representation: vec::Vec<isize>) -> Disjunct {
+        representation.sort_by(|a, b| a.abs().cmp(&b.abs()));
+        representation.dedup();
         Disjunct {
-            literals: clause.iter().map(|literal| Literal::new(literal)).collect(),
+            literals: representation
+                .iter()
+                .map(|literal| Literal::new(literal))
+                .collect(),
         }
     }
 
@@ -105,11 +232,43 @@ impl Disjunct {
             Ok(())
         })?)
     }
+
+    fn width(&self) -> usize {
+        self.literals
+            .iter()
+            .fold(0, |acc, next| max(acc, next.index + 1))
+    }
 }
 
-#[derive(Debug)]
+impl Display for Disjunct {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let mut first = true;
+        self.literals.iter().try_for_each(|literal| {
+            if !first {
+                write!(f, "|")?
+            };
+            first = false;
+            let index = literal.index + 1;
+            if literal.inverted {
+                write!(f, "^x{index}")
+            } else {
+                write!(f, "x{index}")
+            }
+        })
+    }
+}
+
+impl From<&State> for Disjunct {
+    fn from(x: &State) -> Self {
+        Self {
+            literals: x.as_literals(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CNF {
-    disjuncts: vec::Vec<Disjunct>,
+    pub disjuncts: vec::Vec<Disjunct>,
 }
 
 impl CNF {
@@ -129,13 +288,35 @@ impl CNF {
                 .iter()
                 .try_for_each(|d| d.validate_height(&variables))?
         };
-        Ok(CNF {
-            disjuncts: disjuncts,
-        })
+        Ok(CNF { disjuncts })
     }
+
     fn compute(&self, state: &State) -> Value {
         self.disjuncts
             .iter()
             .fold(Value::Some(true), |acc, next| acc & next.compute(state))
+    }
+
+    pub fn width(&self) -> usize {
+        self.disjuncts
+            .iter()
+            .fold(0, |acc, next| max(acc, next.width()))
+    }
+
+    pub fn extend(&mut self, state: &State) {
+        self.disjuncts.push(state.into())
+    }
+}
+
+impl Display for CNF {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let mut first = true;
+        self.disjuncts.iter().try_for_each(|disjunct| {
+            if !first {
+                write!(f, "&")?
+            }
+            first = false;
+            write!(f, "({disjunct})")
+        })
     }
 }
