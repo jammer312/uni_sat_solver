@@ -1,5 +1,6 @@
-use crate::language::Disjunct;
-use crate::language::CNF;
+use super::language::Disjunct;
+use super::language::CNF;
+use super::Error;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::digit0;
@@ -81,7 +82,7 @@ fn satlib_footer(input: &str) -> IResult<&str, (), VerboseError<&str>> {
     value((), tuple((multispace0, tag("%\n0"), multispace0)))(input)
 }
 
-pub fn cnf(input: &str) -> IResult<&str, Result<CNF, crate::Error>, VerboseError<&str>> {
+pub fn cnf(input: &str) -> IResult<&str, Result<CNF, Error>, VerboseError<&str>> {
     map(
         terminated(
             pair(opt(header), many1(clause)),

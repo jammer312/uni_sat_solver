@@ -1,12 +1,12 @@
 use std::fmt;
 use std::fmt::Display;
 
-use crate::language::Disjunct;
-use crate::language::Literal;
-use crate::language::State;
-use crate::language::Value;
-use crate::language::CNF;
-use crate::Error;
+use super::language::Disjunct;
+use super::language::Literal;
+use super::language::State;
+use super::language::Value;
+use super::language::CNF;
+use super::Error;
 
 #[derive(Debug, PartialEq)]
 pub enum Decision<Implication> {
@@ -61,7 +61,7 @@ impl Analyzable<'_, State, Literal, Error> for Disjunct {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Error;
+    use crate::cdcl::Error;
 
     #[test]
     fn test_disjunct_analyze() -> Result<(), Error> {

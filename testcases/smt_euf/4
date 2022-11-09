@@ -1,0 +1,1 @@
+f(x, y, q(a, b)) == f && q(a, b) == q(b, a) && b != c || f(x, y, q(c, a)) != f  

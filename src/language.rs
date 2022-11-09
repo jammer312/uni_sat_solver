@@ -1,9 +1,6 @@
-use crate::Error;
-use core::cmp::max;
+use core::fmt::Formatter;
 use core::ops;
-use std::fmt;
-use std::fmt::Display;
-use std::vec;
+use std::{fmt::Display, marker::PhantomData, vec};
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub enum Value {
@@ -48,270 +45,106 @@ impl ops::BitAnd<Value> for Value {
     }
 }
 
+impl ops::Not for Value {
+    type Output = Value;
+
+    fn not(self) -> Value {
+        match self {
+            Value::Some(x) => Value::Some(!x),
+            _ => Value::Any,
+        }
+    }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Value::Some(value) => write!(f, "{value}"),
+            Value::Any => write!(f, "any"),
+        }
+    }
+}
+
 impl From<bool> for Value {
     fn from(x: bool) -> Self {
         Value::Some(x)
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct State {
-    pub variables: vec::Vec<Value>,
+pub trait Computable<State, Result> {
+    fn compute(&self, state: &State) -> Result;
 }
 
-impl State {
-    #[allow(dead_code)]
-    pub fn new(mut representation: vec::Vec<isize>) -> Result<State, Error> {
-        representation.sort();
-        representation.dedup();
-        let max_index = representation
-            .iter()
-            .fold(0, |acc, next| max(acc, next.unsigned_abs()));
-        let mut variables = vec::Vec::<Value>::with_capacity(max_index);
-        variables.resize(max_index, Value::Any);
-        representation
-            .iter()
-            .try_for_each(|v| match (v, v.signum() > 0) {
-                (0, ..) => Err(Error::IncorrectInput(
-                    "state init vec cannot contain zeros".to_owned(),
-                )),
-                (index, value) => {
-                    let index = index.unsigned_abs() - 1;
-                    match variables[index] {
-                        Value::Some(_) => Err(Error::IncorrectInput(
-                            "state init vec cannot contain conflicting values".to_owned(),
-                        )),
-                        Value::Any => Ok(variables[index] = value.into()),
-                    }
-                }
-            })?;
-        Ok(State { variables })
-    }
-
-    pub fn new_empty(size: usize) -> State {
-        State {
-            variables: vec![Value::Any; size],
-        }
-    }
-
-    pub fn add(&mut self, literal: &Literal) -> Result<(), Error> {
-        if self.variables.len() < literal.index + 1 {
-            self.variables.resize(literal.index + 1, Value::Any)
-        };
-        match self.variables[literal.index] {
-            Value::Any => Ok(self.variables[literal.index] = Value::Some(!literal.inverted)),
-            Value::Some(x) => {
-                if x == literal.inverted {
-                    Err(Error::ConflictingImplication)
-                } else {
-                    Ok(())
-                }
-            }
-        }
-    }
-
-    pub fn remove(&mut self, literal: &Literal) {
-        match self.variables.get(literal.index) {
-            None => (),
-            Some(_) => self.variables[literal.index] = Value::Any,
-        }
-    }
-
-    pub fn is_filled(&self) -> bool {
-        for variable in &self.variables {
-            match variable {
-                Value::Any => return false,
-                _ => (),
-            }
-        }
-        return true;
-    }
-
-    fn as_literals(&self) -> vec::Vec<Literal> {
-        self.variables
-            .iter()
-            .enumerate()
-            .filter_map(|pair| match pair {
-                (i, Value::Some(v)) => Some(Literal {
-                    index: i,
-                    inverted: !v,
-                }),
-                _ => None,
-            })
-            .collect()
-    }
+#[derive(Clone)]
+pub struct Conjunct<Atom, State> {
+    pub atoms: vec::Vec<Atom>,
+    state_type: PhantomData<*const State>,
 }
 
-impl Display for State {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.variables
-            .iter()
-            .enumerate()
-            .try_for_each(|pair| match pair {
-                (index, Value::Some(true)) => write!(f, "x{} ", index + 1),
-                (index, Value::Some(false)) => write!(f, "^x{} ", index + 1),
-                _ => Ok(()),
-            })
-    }
-}
-
-#[derive(Debug, PartialEq, Clone, Copy, Hash, Eq, PartialOrd, Ord)]
-pub struct Literal {
-    pub index: usize,
-    pub inverted: bool,
-}
-
-impl Literal {
-    pub fn new(literal: &isize) -> Literal {
-        Literal {
-            index: literal.unsigned_abs() - 1,
-            inverted: literal.signum() < 0,
-        }
-    }
-
-    pub fn compute(&self, state: &State) -> Value {
-        match state.variables.get(self.index) {
-            Some(&x) => x ^ self.inverted.into(),
-            None => Value::Any,
-        }
-    }
-
-    pub fn inverted(&self) -> Self {
-        return Self {
-            inverted: !self.inverted,
-            ..*self
-        };
-    }
-}
-
-impl Display for Literal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let index = self.index + 1;
-        if self.inverted {
-            write!(f, "^x{index}")
-        } else {
-            write!(f, "x{index}")
+impl<Atom: Computable<State, Value>, State> Conjunct<Atom, State> {
+    pub fn new(atoms: vec::Vec<Atom>) -> Conjunct<Atom, State> {
+        Conjunct::<Atom, State> {
+            atoms,
+            state_type: PhantomData,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Disjunct {
-    pub literals: vec::Vec<Literal>,
-}
-
-impl Disjunct {
-    pub fn new(mut representation: vec::Vec<isize>) -> Disjunct {
-        representation.sort_by(|a, b| a.abs().cmp(&b.abs()));
-        representation.dedup();
-        Disjunct {
-            literals: representation
-                .iter()
-                .map(|literal| Literal::new(literal))
-                .collect(),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn compute(&self, state: &State) -> Value {
-        self.literals
-            .iter()
-            .fold(Value::Some(false), |acc, next| acc | next.compute(state))
-    }
-
-    fn validate_height(&self, max_height: &usize) -> Result<(), Error> {
-        Ok(self.literals.iter().try_for_each(|l| {
-            if l.index > *max_height {
-                return Err(Error::Validation(format!(
-                    "found incorrect index for literal (got {}, must not be higher than {})",
-                    l.index, max_height
-                )));
-            };
-            Ok(())
-        })?)
-    }
-
-    fn width(&self) -> usize {
-        self.literals
-            .iter()
-            .fold(0, |acc, next| max(acc, next.index + 1))
-    }
-}
-
-impl Display for Disjunct {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+impl<Atom: Display, State> Display for Conjunct<Atom, State> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         let mut first = true;
-        self.literals.iter().try_for_each(|literal| {
+        self.atoms.iter().try_for_each(|disjunct| {
             if !first {
-                write!(f, "|")?
+                write!(f, " && ")?
             };
-            first = false;
-            let index = literal.index + 1;
-            if literal.inverted {
-                write!(f, "^x{index}")
-            } else {
-                write!(f, "x{index}")
-            }
-        })
-    }
-}
-
-impl From<&State> for Disjunct {
-    fn from(x: &State) -> Self {
-        Self {
-            literals: x.as_literals(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CNF {
-    pub disjuncts: vec::Vec<Disjunct>,
-}
-
-impl CNF {
-    pub fn new(
-        header: Option<(usize, usize)>,
-        disjuncts: vec::Vec<Disjunct>,
-    ) -> Result<CNF, Error> {
-        if let Some((variables, clauses)) = header {
-            if !(disjuncts.len() == clauses) {
-                return Err(Error::Validation(format!(
-                    "incorrect number of clauses (expected {}, got {}",
-                    clauses,
-                    disjuncts.len()
-                )));
-            };
-            disjuncts
-                .iter()
-                .try_for_each(|d| d.validate_height(&variables))?
-        };
-        Ok(CNF { disjuncts })
-    }
-
-    #[allow(dead_code)]
-    fn compute(&self, state: &State) -> Value {
-        self.disjuncts
-            .iter()
-            .fold(Value::Some(true), |acc, next| acc & next.compute(state))
-    }
-
-    pub fn width(&self) -> usize {
-        self.disjuncts
-            .iter()
-            .fold(0, |acc, next| max(acc, next.width()))
-    }
-}
-
-impl Display for CNF {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let mut first = true;
-        self.disjuncts.iter().try_for_each(|disjunct| {
-            if !first {
-                write!(f, "&")?
-            }
             first = false;
             write!(f, "({disjunct})")
         })
+    }
+}
+
+impl<State, Atom: Computable<State, Value>> Computable<State, Value> for Conjunct<Atom, State> {
+    fn compute(&self, state: &State) -> Value {
+        self.atoms
+            .iter()
+            .fold(Value::Some(true), |acc, next| acc & next.compute(state))
+    }
+}
+
+#[derive(Clone)]
+pub struct Disjunct<Atom: Clone, State: Clone> {
+    pub atoms: vec::Vec<Atom>,
+    state_type: PhantomData<*const State>,
+}
+
+impl<Atom: Clone + Computable<State, Value>, State: Clone> Disjunct<Atom, State> {
+    pub fn new(atoms: vec::Vec<Atom>) -> Disjunct<Atom, State> {
+        Disjunct::<Atom, State> {
+            atoms,
+            state_type: PhantomData,
+        }
+    }
+}
+
+impl<Atom: Clone + Display, State: Clone> Display for Disjunct<Atom, State> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let mut first = true;
+        self.atoms.iter().try_for_each(|atom| {
+            if !first {
+                write!(f, " || ")?
+            };
+            first = false;
+            write!(f, "{atom}")
+        })
+    }
+}
+
+impl<State: Clone, Atom: Clone + Computable<State, Value>> Computable<State, Value>
+    for Disjunct<Atom, State>
+{
+    fn compute(&self, state: &State) -> Value {
+        self.atoms
+            .iter()
+            .fold(Value::Some(false), |acc, next| acc | next.compute(state))
     }
 }
